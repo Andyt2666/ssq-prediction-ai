@@ -89,7 +89,14 @@ class SSQFilter:
                 break
 
             cand_reds = set(cand["reds"])
-            # 检查与已入选注数的重合数
+            cand_blue = cand["blue"]
+
+            # 1. 检查蓝球重复数 (同一蓝球最多允许出现 2 次，保证蓝球覆盖面)
+            blue_count = sum(1 for sel in selected if sel["blue"] == cand_blue)
+            if blue_count >= 2:
+                continue
+
+            # 2. 检查与已入选注数的红球重合数
             conflict = False
             for sel in selected:
                 overlap = len(cand_reds.intersection(set(sel["reds"])))
