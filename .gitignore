@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.parquet
+*.csv
+checkpoints/
+weights/
+*.pt
+.DS_Store
+.vscode/
+.idea/

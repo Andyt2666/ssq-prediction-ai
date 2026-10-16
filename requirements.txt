@@ -1,0 +1,24 @@
+# SSQ-Prediction-AI Dependencies
+# Core Deep Learning
+torch>=2.0.0
+torchvision
+
+# Scientific Computing & Data Analysis
+numpy>=1.23.0
+pandas>=2.0.0
+scipy>=1.10.0
+scikit-learn>=1.2.0
+
+# Web Crawling & HTML Parsing
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Storage & Serialization
+pyarrow>=12.0.0
+
+# Visualization & Dashboard
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+tqdm>=4.65.0
