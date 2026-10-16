@@ -1,0 +1,45 @@
+# 双色球 AI 选号与实验系统配置
+data:
+  csv_path: "data/raw/ssq_history.csv"
+  db_path: "data/ssq.db"
+  crawler_url: "https://datachart.500.com/ssq/history/newinc/history.php?start=03001&end=26999"
+
+features:
+  window_size: 20            # T 期历史窗口 (默认20期)
+  num_red: 33                # 红球总数
+  num_blue: 16               # 蓝球总数
+
+model:
+  type: "tcn"                # 模型类型: tcn 或 lstm
+  num_channels: [64, 64, 64] # TCN 各隐层通道数
+  kernel_size: 3             # 卷积核大小
+  dropout: 0.2               # 丢弃率
+  lr: 0.001                  # 学习率
+  weight_decay: 0.0001       # 权重衰减
+  batch_size: 32             # 批大小
+  epochs: 30                 # 训练轮数
+  random_seed: 42            # 随机种子
+  device: "cuda"             # 训练设备 (cuda 或 cpu)
+
+sampler:
+  num_candidates: 8000       # 候选池采样注数 (5k~10k)
+  tau: 1.0                   # 采样温度系数 tau (控制尖锐度)
+  top_n_final: 5             # 最终精选推荐注数
+
+filters:
+  sum_range: [80, 130]       # 红球和值合理区间
+  valid_odd_even: ["3:3", "4:2", "2:4"]  # 常见奇偶比
+  min_ac_value: 6            # 最小 AC 值 (复杂度)
+  max_consecutive: 2         # 最大连续号码数量 (如不出现3连号)
+  avoid_popular: true        # 避开纯生日号(所有红球<=31且全为常见日期)
+  max_red_overlap: 3         # 选出多注之间的红球最大重合数 (多样性约束)
+
+backtest:
+  test_issues: 100           # 历史滚动回测期数
+  monte_carlo_runs: 1000     # 蒙特卡洛随机基线模拟次数
+  ticket_price: 2            # 单注成本 (元)
+  prizes:                    # 固定奖金
+    p3: 3000                 # 三等奖 (5+1)
+    p4: 200                  # 四等奖 (5+0, 4+1)
+    p5: 10                   # 五等奖 (4+0, 3+1)
+    p6: 5                    # 六等奖 (2+1, 1+1, 0+1)
