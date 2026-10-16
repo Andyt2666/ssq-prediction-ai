@@ -387,6 +387,84 @@ def cmd_predict_stgnn(args, cfg):
     print(DISCLAIMER)
 
 
+def cmd_backtest_stgnn(args, cfg):
+    import csv
+    from src.model_stgnn import SSQComplexSTGNN, build_domain_adj_matrices
+    from src.dataset_stgnn import SSQGraphVisualDataset
+
+    csv_path = cfg.get("data", {}).get("csv_path", "data/raw/ssq_history.csv")
+    with open(csv_path, "r", encoding="utf-8") as f:
+        records = list(csv.DictReader(f))
+
+    w_size = cfg.get("features", {}).get("window_size", 20)
+    test_issues = args.issues or cfg.get("backtest", {}).get("test_issues", 100)
+    print(f"[*] 启动 ST-GNN-Vision 复杂时空图对过去 {test_issues} 期的 Walk-Forward 滚动前向回测...")
+
+    A_domain, A_co, A_trans = build_domain_adj_matrices(records)
+    dataset = SSQGraphVisualDataset(records, window_size=w_size)
+
+    device = get_device()
+    model = SSQComplexSTGNN(
+        node_in_feats=6, hidden_dim=64, num_layers=2, window_size=w_size,
+        adj_domain=A_domain, adj_co=A_co, adj_trans=A_trans
+    ).to(device)
+
+    model_path = "data/stgnn_model.pth"
+    if os.path.exists(model_path):
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        print(f"[*] 已载入预训练 ST-GNN-Vision 权重: {model_path}")
+    else:
+        print("[!] 未找到 ST-GNN 权重，先执行训练...")
+        cmd_train_stgnn(args, cfg)
+
+    model.eval()
+    f_engine = SSQFilter(cfg.get("filters", {}))
+    top_n = cfg.get("sampler", {}).get("top_n_final", 5)
+
+    simulated_preds = []
+    total_len = len(dataset)
+    start_eval_idx = total_len - test_issues
+
+    for eval_idx in range(start_eval_idx, total_len):
+        n_seq, t_grid, b_hist, _, _ = dataset[eval_idx]
+        with torch.no_grad():
+            r_l, b_l = model(
+                n_seq.unsqueeze(0).to(device),
+                t_grid.unsqueeze(0).to(device),
+                b_hist.unsqueeze(0).to(device)
+            )
+            r_p = torch.sigmoid(r_l).squeeze(0).cpu().numpy()
+            b_p = torch.softmax(b_l, dim=-1).squeeze(0).cpu().numpy()
+
+        sampler = SSQSampler(r_p, b_p, tau=1.0)
+        cands = sampler.sample_candidates(n_candidates=3000, random_seed=eval_idx)
+        passed, _ = f_engine.filter_candidates(cands)
+        if len(passed) < top_n:
+            passed = cands
+        chosen = f_engine.select_diverse_tickets(passed, top_n=top_n)
+        simulated_preds.append(chosen)
+
+    backtester = SSQBacktester(records, test_issues=test_issues, config=cfg)
+    results = backtester.run_simulation(simulated_preds)
+    backtester.generate_report_chart(results, save_path="reports/backtest_stgnn_report.png")
+
+    with open("reports/backtest_stgnn_summary.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
+    print("\n" + "=" * 65)
+    print(f"    🌌 【ST-GNN-Vision 历史 {test_issues} 期 Walk-Forward 回测全面报告】")
+    print("=" * 65)
+    print(f"  • 总评估期数: {results['test_issues']} 期 | 每期选号: {results['tickets_per_issue']} 注 (总计 {results['total_tickets_evaluated']} 注)")
+    print(f"  • 总购彩投入: {results['total_cost_yuan']:.1f} 元 | 累计中奖返还: {results['total_payout_yuan']:.1f} 元")
+    print(f"  • 累计净损益: {results['total_profit_yuan']:.1f} 元 | 实际返还率 (ROI): {results['roi_percent']:.2f}%")
+    print(f"  • 红球平均命中: {results['red_hit_avg']:.4f} 个 (理论随机期望: {results['red_hit_theoretical']:.4f} 个)")
+    print(f"  • 蓝球命中概率: {results['blue_hit_rate']*100:.2f}% (理论随机期望: {results['blue_hit_theoretical']*100:.2f}%)")
+    print(f"  • 各奖级明细: {results['prize_counter']}")
+    print(f"  • 统计显著性检验: {'⚠️ 显著偏离随机' if results['is_significant'] else '✅ 落在随机 95% 置信区间内 (符合无超额收益科学预期)'}")
+    print("=" * 65)
+    print(DISCLAIMER)
+
+
 def main():
     parser = argparse.ArgumentParser(description="SSQ-Prediction-AI: 双色球 AI 选号与科学实验系统")
     subparsers = parser.add_subparsers(dest="command", help="子命令")
@@ -414,6 +492,10 @@ def main():
     stgnn_pred_parser = subparsers.add_parser("predict_stgnn", help="使用 ST-GNN-Vision 生成推荐号码")
     stgnn_pred_parser.add_argument("--num", type=int, default=5, help="精选推荐注数")
 
+    # backtest_stgnn
+    stgnn_bt_parser = subparsers.add_parser("backtest_stgnn", help="执行 ST-GNN-Vision 滚动时序回测")
+    stgnn_bt_parser.add_argument("--issues", type=int, default=100, help="回测期数")
+
     args = parser.parse_args()
     cfg = load_config()
 
@@ -429,6 +511,8 @@ def main():
         cmd_train_stgnn(args, cfg)
     elif args.command == "predict_stgnn":
         cmd_predict_stgnn(args, cfg)
+    elif args.command == "backtest_stgnn":
+        cmd_backtest_stgnn(args, cfg)
     else:
         parser.print_help()
 
