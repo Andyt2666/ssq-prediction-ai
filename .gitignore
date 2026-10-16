@@ -1,12 +1,30 @@
+# Python cache
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Virtual Environment
 .venv/
 venv/
-*.parquet
-*.csv
+ENV/
+
+# Data and large local databases (generated via python main.py fetch)
+data/raw/
+data/processed/
+data/*.db
+data/*.sqlite
+data/*.csv
+data/*.parquet
+*.db
+*.sqlite
+
+# Model weights
 checkpoints/
 weights/
 *.pt
+*.pth
+
+# IDE and OS
 .DS_Store
 .vscode/
 .idea/
