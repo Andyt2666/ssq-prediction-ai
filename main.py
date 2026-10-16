@@ -250,6 +250,143 @@ def cmd_backtest(args, cfg):
     print(DISCLAIMER)
 
 
+def cmd_train_stgnn(args, cfg):
+    import csv
+    from src.model_stgnn import SSQComplexSTGNN, build_domain_adj_matrices
+    from src.dataset_stgnn import SSQGraphVisualDataset
+
+    csv_path = cfg.get("data", {}).get("csv_path", "data/raw/ssq_history.csv")
+    with open(csv_path, "r", encoding="utf-8") as f:
+        records = list(csv.DictReader(f))
+
+    w_size = cfg.get("features", {}).get("window_size", 20)
+    A_domain, A_co, A_trans = build_domain_adj_matrices(records)
+    dataset = SSQGraphVisualDataset(records, window_size=w_size)
+
+    test_size = 100
+    train_size = len(dataset) - test_size
+    train_indices = list(range(train_size))
+    test_indices = list(range(train_size, len(dataset)))
+
+    train_sampler = torch.utils.data.SubsetRandomSampler(train_indices)
+    test_sampler = torch.utils.data.SubsetRandomSampler(test_indices)
+
+    batch_size = cfg.get("model", {}).get("batch_size", 32)
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
+    test_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, sampler=test_sampler)
+
+    device = get_device()
+    print(f"[*] 训练复杂时空图网络 ST-GNN-Vision (设备: {device})")
+
+    model = SSQComplexSTGNN(
+        node_in_feats=6,
+        hidden_dim=64,
+        num_layers=2,
+        window_size=w_size,
+        adj_domain=A_domain,
+        adj_co=A_co,
+        adj_trans=A_trans,
+        dropout=0.2
+    ).to(device)
+
+    epochs = args.epochs or 25
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+
+    print(f"[*] 开始训练 ST-GNN-Vision 模型 (共 {epochs} 轮)...")
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total_loss = 0.0
+        for n_seq, t_grid, b_hist, y_red, y_blue in train_loader:
+            n_seq = n_seq.to(device)
+            t_grid = t_grid.to(device)
+            b_hist = b_hist.to(device)
+            y_red = y_red.to(device)
+            y_blue = y_blue.to(device)
+
+            optimizer.zero_grad()
+            r_logits, b_logits = model(n_seq, t_grid, b_hist)
+            loss, _, _ = compute_loss(r_logits, b_logits, y_red, y_blue)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * len(n_seq)
+
+        avg_train = total_loss / train_size
+        if epoch % 5 == 0 or epoch == epochs:
+            model.eval()
+            total_val = 0.0
+            with torch.no_grad():
+                for n_seq, t_grid, b_hist, y_red, y_blue in test_loader:
+                    n_seq, t_grid, b_hist = n_seq.to(device), t_grid.to(device), b_hist.to(device)
+                    y_red, y_blue = y_red.to(device), y_blue.to(device)
+                    r_logits, b_logits = model(n_seq, t_grid, b_hist)
+                    loss, _, _ = compute_loss(r_logits, b_logits, y_red, y_blue)
+                    total_val += loss.item() * len(n_seq)
+            avg_val = total_val / test_size
+            print(f"  ST-GNN Epoch [{epoch:02d}/{epochs:02d}] - 训练损失: {avg_train:.4f} | 验证损失: {avg_val:.4f}")
+
+    os.makedirs("data", exist_ok=True)
+    save_path = "data/stgnn_model.pth"
+    torch.save(model.state_dict(), save_path)
+    print(f"[+] 复杂时空图模型已保存至: {save_path}")
+
+
+def cmd_predict_stgnn(args, cfg):
+    import csv
+    from src.model_stgnn import SSQComplexSTGNN, build_domain_adj_matrices
+    from src.dataset_stgnn import SSQGraphVisualDataset
+
+    csv_path = cfg.get("data", {}).get("csv_path", "data/raw/ssq_history.csv")
+    with open(csv_path, "r", encoding="utf-8") as f:
+        records = list(csv.DictReader(f))
+
+    w_size = cfg.get("features", {}).get("window_size", 20)
+    A_domain, A_co, A_trans = build_domain_adj_matrices(records)
+    dataset = SSQGraphVisualDataset(records, window_size=w_size)
+
+    device = get_device()
+    model = SSQComplexSTGNN(
+        node_in_feats=6, hidden_dim=64, num_layers=2, window_size=w_size,
+        adj_domain=A_domain, adj_co=A_co, adj_trans=A_trans
+    ).to(device)
+
+    model_path = "data/stgnn_model.pth"
+    if os.path.exists(model_path):
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        print(f"[*] 已载入预训练 ST-GNN-Vision 权重: {model_path}")
+    else:
+        print("[!] 未找到 ST-GNN 权重，请先执行: python main.py train_stgnn")
+        return
+
+    # 提取最后一组样本
+    n_seq, t_grid, b_hist, _, _ = dataset[len(dataset) - 1]
+    model.eval()
+    with torch.no_grad():
+        r_l, b_l = model(n_seq.unsqueeze(0).to(device), t_grid.unsqueeze(0).to(device), b_hist.unsqueeze(0).to(device))
+        r_probs = torch.sigmoid(r_l).squeeze(0).cpu().numpy()
+        b_probs = torch.softmax(b_l, dim=-1).squeeze(0).cpu().numpy()
+
+    sampler = SSQSampler(r_probs, b_probs, tau=1.0)
+    cands = sampler.sample_candidates(n_candidates=8000)
+    f_engine = SSQFilter(cfg.get("filters", {}))
+    passed, stats = f_engine.filter_candidates(cands)
+    print(f"[*] ST-GNN 走势图采样 {stats['total_input']} 注 -> 过滤合格 {stats['passed_count']} 注")
+
+    top_n = args.num or 5
+    selected = f_engine.select_diverse_tickets(passed, top_n=top_n)
+
+    print("\n" + "=" * 65)
+    print(f"  🌌 【ST-GNN-Vision 多拓扑时空图网络精选 {len(selected)} 注推荐】")
+    print("=" * 65)
+    for idx, t in enumerate(selected, 1):
+        red_str = " ".join(f"{x:02d}" for x in t["reds"])
+        blue_str = f"{t['blue']:02d}"
+        s_red = sum(t["reds"])
+        odds = sum(1 for x in t["reds"] if x % 2 == 1)
+        print(f"  第 {idx} 注:  🔴 红球 [ {red_str} ]  🔵 蓝球 [ {blue_str} ]  | 和值: {s_red:03d} 奇偶: {odds}:{6-odds}")
+    print("=" * 65)
+    print(DISCLAIMER)
+
+
 def main():
     parser = argparse.ArgumentParser(description="SSQ-Prediction-AI: 双色球 AI 选号与科学实验系统")
     subparsers = parser.add_subparsers(dest="command", help="子命令")
@@ -269,6 +406,14 @@ def main():
     backtest_parser = subparsers.add_parser("backtest", help="执行滚动时序回测对比随机基准")
     backtest_parser.add_argument("--issues", type=int, default=100, help="回测期数")
 
+    # train_stgnn
+    stgnn_train_parser = subparsers.add_parser("train_stgnn", help="训练复杂时空图与走势图双流模型 (ST-GNN-Vision)")
+    stgnn_train_parser.add_argument("--epochs", type=int, default=25, help="训练轮数")
+
+    # predict_stgnn
+    stgnn_pred_parser = subparsers.add_parser("predict_stgnn", help="使用 ST-GNN-Vision 生成推荐号码")
+    stgnn_pred_parser.add_argument("--num", type=int, default=5, help="精选推荐注数")
+
     args = parser.parse_args()
     cfg = load_config()
 
@@ -280,6 +425,10 @@ def main():
         cmd_predict(args, cfg)
     elif args.command == "backtest":
         cmd_backtest(args, cfg)
+    elif args.command == "train_stgnn":
+        cmd_train_stgnn(args, cfg)
+    elif args.command == "predict_stgnn":
+        cmd_predict_stgnn(args, cfg)
     else:
         parser.print_help()
 
