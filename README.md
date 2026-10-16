@@ -23,47 +23,51 @@
 ## 🏛️ 全流程系统架构图 (System Architecture)
 
 ```mermaid
-flowchart TD
-    subgraph Data["1. 数据层 (Data Pipeline)"]
-        D1["500.com 全量历史开奖 (2003-2026, 3515+期)"] --> D2["数据清洗 & SQLite / CSV 存储"]
-        D2 --> D3["统计学随机性检验 (卡方检验 / 游程检验 / 自相关)"]
+graph TD
+    subgraph Sub1 ["1. 数据层 (Data Pipeline)"]
+        D1["500.com 历史开奖 (2003-2026 3515期)"] --> D2["数据清洗与 SQLite/CSV 存储"]
+        D2 --> D3["统计学检验 (卡方检验/游程/自相关)"]
     end
 
-    subgraph Features["2. 多模态特征工程 (Feature Stream)"]
-        D2 --> F1["33维红球多热 / 16维蓝球独热"]
-        D2 --> F2["动态实时遗漏矩阵 (Omission Gap)"]
-        D2 --> F3["滚动和值 / 跨度 / 奇偶比 / AC值 / 连号数"]
-        D2 --> F4["走势图 2D 二值点阵图像 [Window_T, 33]"]
+    subgraph Sub2 ["2. 特征工程 (Feature Stream)"]
+        D2 --> F1["红球 33 维多热 / 蓝球 16 维独热"]
+        D2 --> F2["实时遗漏矩阵 (Omission Gap)"]
+        D2 --> F3["和值/跨度/奇偶比/AC值统计量"]
+        D2 --> F4["走势图 2D 点阵图像 [Window_T, 33]"]
     end
 
-    subgraph Models["3. 深度学习模型库 (Model Zoo)"]
-        direction TB
-        F1 & F2 & F3 --> M1["基础模型: TCN 时间因果膨胀卷积网络"]
-        
-        F4 --> M2_V["视觉流: 2D 卷积提取斜连/重叠形态"]
-        F1 & F2 --> M2_G["空间流: 4重异质邻接图 (数论/共现/转移/自适应)"]
-        M2_V & M2_G --> M2["复杂前沿: ST-GNN-Vision 跨模态注意力融合网络"]
+    subgraph Sub3 ["3. 深度学习模型 (Model Zoo)"]
+        F1 --> M1["基础模型: TCN 时间因果卷积"]
+        F2 --> M1
+        F3 --> M1
+
+        F4 --> M2_V["视觉流: 2D 卷积扫描斜连与重叠"]
+        F1 --> M2_G["空间流: 四重异质图注意力"]
+        F2 --> M2_G
+        M2_V --> M2["前沿模型: ST-GNN-Vision 跨模态融合"]
+        M2_G --> M2
     end
 
-    subgraph Selection["4. 采样与智能缩水 (Smart Funnel Filtering)"]
-        M1 & M2 --> S1["温度系数 τ 概率采样 (生成 8,000 注候选池)"]
+    subgraph Sub4 ["4. 漏斗缩水过滤 (Smart Funnel Filtering)"]
+        M1 --> S1["温度系数 tau 概率采样 (8000注候选池)"]
+        M2 --> S1
         S1 --> S2{"五级漏斗规则过滤器"}
-        S2 -->|剔除| S_Drop["丢弃异常注 (极端和值/全奇偶/超长连号/大众生日号)"]
-        S2 -->|保留 (合格率 ~51%)| S3["多样性贪心去重 (两两红球重合 ≤ 3, 蓝球多点覆盖)"]
+        S2 -->|剔除| S_Drop["丢弃极端注数 (和值异常/全奇偶/超长连号)"]
+        S2 -->|合格| S3["多样性贪心精选 (红球重合<=3, 蓝球多点覆盖)"]
         S3 --> S4["精选 5 注 / 10 注推荐"]
     end
 
-    subgraph Evaluation["5. 科学回测与基准对照 (Backtesting Benchmark)"]
-        S4 --> B1["严格 Walk-Forward 前向滚动回测 (过去100期)"]
-        B1 --> B2["1000 次蒙特卡洛纯随机选号基线"]
-        B2 --> B3["95% 置信带显著性检验 & ROI 资金收益曲线报告"]
+    subgraph Sub5 ["5. 科学回溯对照 (Backtesting Benchmark)"]
+        S4 --> B1["Walk-Forward 前向滚动回测 (过去100期)"]
+        B1 --> B2["1000 次蒙特卡洛纯随机选号基准"]
+        B2 --> B3["95% 置信带显著性检验与资金收益曲线"]
     end
 
-    style Data fill:#f8f9fa,stroke:#ced4da,stroke-width:2px
-    style Features fill:#e8f4f8,stroke:#17a2b8,stroke-width:2px
-    style Models fill:#f3e8ff,stroke:#6f42c1,stroke-width:2px
-    style Selection fill:#fff3cd,stroke:#ffc107,stroke-width:2px
-    style Evaluation fill:#d4edda,stroke:#28a745,stroke-width:2px
+    style Sub1 fill:#f8f9fa,stroke:#6c757d,stroke-width:1px
+    style Sub2 fill:#e8f4f8,stroke:#17a2b8,stroke-width:1px
+    style Sub3 fill:#f3e8ff,stroke:#6f42c1,stroke-width:1px
+    style Sub4 fill:#fff3cd,stroke:#ffc107,stroke-width:1px
+    style Sub5 fill:#d4edda,stroke:#28a745,stroke-width:1px
 ```
 
 ---
